@@ -1,15 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, ScrollView } from 'react-native';
 import { Text, Card, FAB, useTheme, List, IconButton, TextInput, Button, Portal, Modal, Checkbox, Menu } from 'react-native-paper';
-
-interface Client {
-  id: string;
-  name: string;
-  email: string;
-  phone: string;
-  cnpj: string;
-  isProLabore: boolean;
-}
+import { Client } from '../types';
+import { useClientContext } from '../contexts/ClientContext';
+import NotificationService from '../services/NotificationService';
 
 interface PayrollStatus {
   [key: string]: boolean; // key format: "clientId_month_year"
@@ -17,18 +11,24 @@ interface PayrollStatus {
 
 const PayrollChecklist = () => {
   const theme = useTheme();
-  const [clients, setClients] = useState<Client[]>([]);
+  const { clients, addClient, updateClient, deleteClient: removeClient } = useClientContext();
   const [payrollStatus, setPayrollStatus] = useState<PayrollStatus>({});
   const [modalVisible, setModalVisible] = useState(false);
   const [detailsModalVisible, setDetailsModalVisible] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
   const [menuVisible, setMenuVisible] = useState<string | null>(null);
+  const [sindicatoMenuVisible, setSindicatoMenuVisible] = useState(false);
   const [newClient, setNewClient] = useState<Omit<Client, 'id'>>({
     name: '',
     email: '',
     phone: '',
     cnpj: '',
-    isProLabore: false,
+    address: '',
+    payrollSent: false,
+    union: {
+      name: '',
+      baseDate: ''
+    }
   });
   const [currentDate, setCurrentDate] = useState(new Date());
 
@@ -55,26 +55,38 @@ const PayrollChecklist = () => {
       const client: Client = {
         id: Date.now().toString(),
         ...newClient,
+        union: {
+          name: newClient.union?.name || '',
+          baseDate: newClient.union?.baseDate || ''
+        }
       };
-      setClients([...clients, client]);
+      addClient(client);
       setNewClient({
         name: '',
         email: '',
         phone: '',
         cnpj: '',
-        isProLabore: false,
+        address: '',
+        payrollSent: false,
+        union: {
+          name: '',
+          baseDate: ''
+        }
       });
       setModalVisible(false);
     }
   };
 
   const handleEditClient = () => {
-    if (editingClient) {
-      setClients(clients.map(client => 
-        client.id === editingClient.id ? editingClient : client
-      ));
+    if (editingClient && editingClient.name.trim()) {
+      updateClient(editingClient.id, {
+        ...editingClient,
+        union: {
+          name: editingClient.union?.name || '',
+          baseDate: editingClient.union?.baseDate || ''
+        }
+      });
       setDetailsModalVisible(false);
-      setEditingClient(null);
     }
   };
 
@@ -87,7 +99,7 @@ const PayrollChecklist = () => {
   };
 
   const deleteClient = (clientId: string) => {
-    setClients(clients.filter(client => client.id !== clientId));
+    removeClient(clientId);
     const newStatus = { ...payrollStatus };
     Object.keys(newStatus).forEach(key => {
       if (key.startsWith(`${clientId}_`)) {
@@ -108,6 +120,51 @@ const PayrollChecklist = () => {
     setDetailsModalVisible(true);
     setMenuVisible(null);
   };
+
+  // Função para obter sindicatos únicos
+  const getUniqueUnions = () => {
+    const unions = clients
+      .filter(client => client.union?.name && client.union.name.trim() !== '')
+      .map(client => ({
+        name: client.union?.name || '',
+        baseDate: client.union?.baseDate || ''
+      }));
+
+    // Remove duplicatas mantendo apenas o primeiro de cada nome
+    const uniqueUnions = unions.reduce((acc, current) => {
+      const exists = acc.find(item => item.name === current.name);
+      if (!exists) {
+        acc.push(current);
+      }
+      return acc;
+    }, [] as { name: string; baseDate: string }[]);
+
+    return uniqueUnions;
+  };
+
+  const getMonthName = (month: string) => {
+    const monthNumber = parseInt(month);
+    if (isNaN(monthNumber) || monthNumber < 1 || monthNumber > 12) return '';
+    return months[monthNumber - 1];
+  };
+
+  const handleSelectUnion = (union: { name: string; baseDate: string }) => {
+    setNewClient(prev => ({
+      ...prev,
+      union: {
+        name: union.name,
+        baseDate: union.baseDate
+      }
+    }));
+    setSindicatoMenuVisible(false);
+  };
+
+  useEffect(() => {
+    // Verifica notificações ao iniciar o app
+    NotificationService.checkUnionNotifications(clients);
+    // Agenda verificação mensal
+    NotificationService.scheduleMonthlyCheck();
+  }, [clients]);
 
   return (
     <View style={styles.container}>
@@ -147,7 +204,7 @@ const PayrollChecklist = () => {
                   <List.Item
                     key={client.id}
                     title={client.name}
-                    description={`${client.cnpj ? `CNPJ: ${client.cnpj} | ` : ''}${client.isProLabore ? 'Pró-Labore' : 'Folha Completa'}`}
+                    description={`${client.cnpj ? `CNPJ: ${client.cnpj} | ` : ''}${client.union?.name ? `Sindicato: ${client.union.name}` : ''}`}
                     left={props => (
                       <List.Icon
                         {...props}
@@ -207,142 +264,238 @@ const PayrollChecklist = () => {
           contentContainerStyle={styles.modalContainer}
         >
           <ScrollView>
-            <Text variant="titleLarge" style={styles.modalTitle}>
-              Adicionar Cliente
-            </Text>
-            <TextInput
-              label="Nome do Cliente"
-              value={newClient.name}
-              onChangeText={(text) => setNewClient(prev => ({ ...prev, name: text }))}
-              style={styles.input}
-              mode="outlined"
-            />
-            <TextInput
-              label="Email"
-              value={newClient.email}
-              onChangeText={(text) => setNewClient(prev => ({ ...prev, email: text }))}
-              style={styles.input}
-              mode="outlined"
-              keyboardType="email-address"
-            />
-            <TextInput
-              label="Telefone"
-              value={newClient.phone}
-              onChangeText={(text) => setNewClient(prev => ({ ...prev, phone: text }))}
-              style={styles.input}
-              mode="outlined"
-              keyboardType="phone-pad"
-            />
-            <TextInput
-              label="CNPJ"
-              value={newClient.cnpj}
-              onChangeText={(text) => setNewClient(prev => ({ ...prev, cnpj: text }))}
-              style={styles.input}
-              mode="outlined"
-              keyboardType="numeric"
-            />
-            <View style={styles.checkboxContainer}>
-              <Checkbox
-                status={newClient.isProLabore ? 'checked' : 'unchecked'}
-                onPress={() => setNewClient(prev => ({ ...prev, isProLabore: !prev.isProLabore }))}
-              />
-              <Text style={styles.checkboxLabel}>Apenas Pró-Labore</Text>
-            </View>
-            <View style={styles.modalButtons}>
-              <Button
+            <Text variant="titleLarge" style={styles.modalTitle}>Novo Cliente</Text>
+            <View style={styles.formSection}>
+              <Text variant="titleMedium" style={styles.sectionTitle}>Informações Básicas</Text>
+              <TextInput
+                label="Nome"
+                value={newClient.name}
+                onChangeText={(text) => setNewClient({ ...newClient, name: text })}
+                style={styles.input}
                 mode="outlined"
-                onPress={() => setModalVisible(false)}
-                style={styles.modalButton}
-              >
+              />
+              <TextInput
+                label="CNPJ"
+                value={newClient.cnpj}
+                onChangeText={(text) => setNewClient({ ...newClient, cnpj: text })}
+                style={styles.input}
+                mode="outlined"
+              />
+              <TextInput
+                label="Endereço"
+                value={newClient.address}
+                onChangeText={(text) => setNewClient({ ...newClient, address: text })}
+                style={styles.input}
+                mode="outlined"
+              />
+              <TextInput
+                label="Telefone"
+                value={newClient.phone}
+                onChangeText={(text) => setNewClient({ ...newClient, phone: text })}
+                style={styles.input}
+                mode="outlined"
+                keyboardType="phone-pad"
+              />
+              <TextInput
+                label="Email"
+                value={newClient.email}
+                onChangeText={(text) => setNewClient({ ...newClient, email: text })}
+                style={styles.input}
+                mode="outlined"
+                keyboardType="email-address"
+              />
+            </View>
+
+            <View style={styles.formSection}>
+              <Text variant="titleMedium" style={styles.sectionTitle}>Informações do Sindicato</Text>
+              <View style={styles.unionSelector}>
+                <TextInput
+                  label="Nome do Sindicato"
+                  value={newClient.union?.name}
+                  onChangeText={(text) => setNewClient({ 
+                    ...newClient, 
+                    union: { ...newClient.union, name: text }
+                  })}
+                  style={[styles.input, { flex: 1 }]}
+                  mode="outlined"
+                  right={
+                    <TextInput.Icon
+                      icon="menu-down"
+                      onPress={() => setSindicatoMenuVisible(true)}
+                    />
+                  }
+                />
+                <Portal>
+                  <Modal
+                    visible={sindicatoMenuVisible}
+                    onDismiss={() => setSindicatoMenuVisible(false)}
+                    contentContainerStyle={styles.unionMenu}
+                  >
+                    <ScrollView>
+                      <Text variant="titleMedium" style={styles.modalTitle}>Selecione um Sindicato</Text>
+                      {getUniqueUnions().length === 0 ? (
+                        <Text style={styles.emptyText}>Nenhum sindicato cadastrado</Text>
+                      ) : (
+                        getUniqueUnions().map((union, index) => (
+                          <List.Item
+                            key={index}
+                            title={union.name}
+                            description={`Data Base: ${getMonthName(union.baseDate)}`}
+                            onPress={() => handleSelectUnion(union)}
+                            left={props => <List.Icon {...props} icon="office-building" />}
+                          />
+                        ))
+                      )}
+                    </ScrollView>
+                  </Modal>
+                </Portal>
+              </View>
+              <TextInput
+                label="Data Base"
+                value={newClient.union?.baseDate}
+                onChangeText={(text) => {
+                  // Se o texto estiver vazio, permite apagar
+                  if (text === '') {
+                    setNewClient({ 
+                      ...newClient, 
+                      union: { ...newClient.union, baseDate: '' }
+                    });
+                    return;
+                  }
+                  // Aceita apenas números e limita a 2 dígitos
+                  const numbersOnly = text.replace(/[^0-9]/g, '');
+                  if (numbersOnly.length <= 2) {
+                    const month = parseInt(numbersOnly);
+                    if (month >= 1 && month <= 12) {
+                      setNewClient({ 
+                        ...newClient, 
+                        union: { ...newClient.union, baseDate: numbersOnly }
+                      });
+                    }
+                  }
+                }}
+                style={styles.input}
+                mode="outlined"
+                placeholder="Mês (1-12)"
+                keyboardType="numeric"
+                maxLength={2}
+              />
+            </View>
+
+            <View style={styles.modalButtons}>
+              <Button mode="outlined" onPress={() => setModalVisible(false)} style={styles.button}>
                 Cancelar
               </Button>
-              <Button
-                mode="contained"
-                onPress={handleAddClient}
-                style={styles.modalButton}
-              >
+              <Button mode="contained" onPress={handleAddClient} style={styles.button}>
                 Adicionar
               </Button>
             </View>
           </ScrollView>
         </Modal>
-      </Portal>
 
-      <Portal>
         <Modal
           visible={detailsModalVisible}
-          onDismiss={() => {
-            setDetailsModalVisible(false);
-            setEditingClient(null);
-          }}
+          onDismiss={() => setDetailsModalVisible(false)}
           contentContainerStyle={styles.modalContainer}
         >
-          <ScrollView>
-            <Text variant="titleLarge" style={styles.modalTitle}>
-              Detalhes do Cliente
-            </Text>
-            {editingClient && (
-              <>
+          {editingClient && (
+            <ScrollView>
+              <Text variant="titleLarge" style={styles.modalTitle}>Editar Cliente</Text>
+              <View style={styles.formSection}>
+                <Text variant="titleMedium" style={styles.sectionTitle}>Informações Básicas</Text>
                 <TextInput
-                  label="Nome do Cliente"
+                  label="Nome"
                   value={editingClient.name}
-                  onChangeText={(text) => setEditingClient(prev => prev ? { ...prev, name: text } : null)}
+                  onChangeText={(text) => setEditingClient({ ...editingClient, name: text })}
                   style={styles.input}
                   mode="outlined"
                 />
                 <TextInput
-                  label="Email"
-                  value={editingClient.email}
-                  onChangeText={(text) => setEditingClient(prev => prev ? { ...prev, email: text } : null)}
+                  label="CNPJ"
+                  value={editingClient.cnpj}
+                  onChangeText={(text) => setEditingClient({ ...editingClient, cnpj: text })}
                   style={styles.input}
                   mode="outlined"
-                  keyboardType="email-address"
+                />
+                <TextInput
+                  label="Endereço"
+                  value={editingClient.address}
+                  onChangeText={(text) => setEditingClient({ ...editingClient, address: text })}
+                  style={styles.input}
+                  mode="outlined"
                 />
                 <TextInput
                   label="Telefone"
                   value={editingClient.phone}
-                  onChangeText={(text) => setEditingClient(prev => prev ? { ...prev, phone: text } : null)}
+                  onChangeText={(text) => setEditingClient({ ...editingClient, phone: text })}
                   style={styles.input}
                   mode="outlined"
                   keyboardType="phone-pad"
                 />
                 <TextInput
-                  label="CNPJ"
-                  value={editingClient.cnpj}
-                  onChangeText={(text) => setEditingClient(prev => prev ? { ...prev, cnpj: text } : null)}
+                  label="Email"
+                  value={editingClient.email}
+                  onChangeText={(text) => setEditingClient({ ...editingClient, email: text })}
                   style={styles.input}
                   mode="outlined"
-                  keyboardType="numeric"
+                  keyboardType="email-address"
                 />
-                <View style={styles.checkboxContainer}>
-                  <Checkbox
-                    status={editingClient.isProLabore ? 'checked' : 'unchecked'}
-                    onPress={() => setEditingClient(prev => prev ? { ...prev, isProLabore: !prev.isProLabore } : null)}
-                  />
-                  <Text style={styles.checkboxLabel}>Apenas Pró-Labore</Text>
-                </View>
-                <View style={styles.modalButtons}>
-                  <Button
-                    mode="outlined"
-                    onPress={() => {
-                      setDetailsModalVisible(false);
-                      setEditingClient(null);
-                    }}
-                    style={styles.modalButton}
-                  >
-                    Cancelar
-                  </Button>
-                  <Button
-                    mode="contained"
-                    onPress={handleEditClient}
-                    style={styles.modalButton}
-                  >
-                    Salvar
-                  </Button>
-                </View>
-              </>
-            )}
-          </ScrollView>
+              </View>
+
+              <View style={styles.formSection}>
+                <Text variant="titleMedium" style={styles.sectionTitle}>Informações do Sindicato</Text>
+                <TextInput
+                  label="Nome do Sindicato"
+                  value={editingClient.union?.name}
+                  onChangeText={(text) => setEditingClient({ 
+                    ...editingClient, 
+                    union: { ...editingClient.union, name: text }
+                  })}
+                  style={styles.input}
+                  mode="outlined"
+                />
+                <TextInput
+                  label="Data Base"
+                  value={editingClient.union?.baseDate}
+                  onChangeText={(text) => {
+                    // Se o texto estiver vazio, permite apagar
+                    if (text === '') {
+                      setEditingClient({ 
+                        ...editingClient, 
+                        union: { ...editingClient.union, baseDate: '' }
+                      });
+                      return;
+                    }
+                    // Aceita apenas números e limita a 2 dígitos
+                    const numbersOnly = text.replace(/[^0-9]/g, '');
+                    if (numbersOnly.length <= 2) {
+                      const month = parseInt(numbersOnly);
+                      if (month >= 1 && month <= 12) {
+                        setEditingClient({ 
+                          ...editingClient, 
+                          union: { ...editingClient.union, baseDate: numbersOnly }
+                        });
+                      }
+                    }
+                  }}
+                  style={styles.input}
+                  mode="outlined"
+                  placeholder="Mês (1-12)"
+                  keyboardType="numeric"
+                  maxLength={2}
+                />
+              </View>
+
+              <View style={styles.modalButtons}>
+                <Button mode="outlined" onPress={() => setDetailsModalVisible(false)} style={styles.button}>
+                  Cancelar
+                </Button>
+                <Button mode="contained" onPress={handleEditClient} style={styles.button}>
+                  Salvar
+                </Button>
+              </View>
+            </ScrollView>
+          )}
         </Modal>
       </Portal>
     </View>
@@ -358,39 +511,34 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   header: {
-    padding: 20,
-    backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
+    padding: 16,
+    backgroundColor: 'white',
+    elevation: 2,
   },
   title: {
-    fontWeight: 'bold',
-    color: '#333',
-    marginBottom: 10,
+    marginBottom: 8,
   },
   monthSelector: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 10,
   },
   monthText: {
-    marginHorizontal: 10,
-    color: '#333',
+    marginHorizontal: 16,
   },
   card: {
-    margin: 10,
+    margin: 16,
     elevation: 2,
   },
   cardTitle: {
-    marginBottom: 10,
+    marginBottom: 16,
   },
   clientItem: {
     borderBottomWidth: 1,
     borderBottomColor: '#e0e0e0',
   },
   completedClient: {
-    opacity: 0.6,
+    backgroundColor: '#e3f2fd',
   },
   fab: {
     position: 'absolute',
@@ -403,31 +551,46 @@ const styles = StyleSheet.create({
     padding: 20,
     margin: 20,
     borderRadius: 8,
-    maxHeight: '80%',
+    maxHeight: '90%',
   },
   modalTitle: {
     marginBottom: 20,
-    textAlign: 'center',
   },
-  input: {
-    marginBottom: 10,
-  },
-  checkboxContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  formSection: {
     marginBottom: 20,
   },
-  checkboxLabel: {
-    marginLeft: 8,
+  sectionTitle: {
+    marginBottom: 10,
+    color: '#666',
+  },
+  input: {
+    marginBottom: 12,
   },
   modalButtons: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 10,
+    justifyContent: 'flex-end',
+    marginTop: 20,
+    paddingBottom: 20,
   },
-  modalButton: {
-    flex: 1,
-    marginHorizontal: 5,
+  button: {
+    marginLeft: 10,
+    minWidth: 100,
+  },
+  unionSelector: {
+    position: 'relative',
+    marginBottom: 12,
+  },
+  unionMenu: {
+    backgroundColor: 'white',
+    padding: 20,
+    margin: 20,
+    borderRadius: 8,
+    maxHeight: '80%',
+  },
+  emptyText: {
+    textAlign: 'center',
+    marginVertical: 20,
+    color: '#666',
   },
 });
 

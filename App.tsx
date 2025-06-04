@@ -9,6 +9,7 @@ import React from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { PaperProvider, MD3LightTheme } from 'react-native-paper';
 import HomeScreen from './src/screens/HomeScreen';
+import { ClientProvider } from './src/contexts/ClientContext';
 
 const theme = {
   ...MD3LightTheme,
@@ -23,7 +24,9 @@ function App(): React.JSX.Element {
   return (
     <SafeAreaProvider>
       <PaperProvider theme={theme}>
-        <HomeScreen />
+        <ClientProvider>
+          <HomeScreen />
+        </ClientProvider>
       </PaperProvider>
     </SafeAreaProvider>
   );
